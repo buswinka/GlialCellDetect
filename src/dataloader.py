@@ -17,7 +17,6 @@ import skimage.io as io
 PIL.ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
-
 class FasterRCNNData(Dataset):
     def __init__(self, basedir: str, transforms: Callable) -> None:
 
@@ -43,8 +42,7 @@ class FasterRCNNData(Dataset):
             im_shape = [image.shape[1], image.shape[2]]
 
             # Just because you CAN do a list comprehension, doesnt mean you SHOULD
-            class_labels = torch.tensor(
-                [self._get_class_label(cls.text) for c in root.iter('object') for cls in c.iter('name')])
+            class_labels = torch.tensor([self._get_class_label(cls.text) for c in root.iter('object') for cls in c.iter('name')])
             bbox_loc = torch.tensor([box_from_text(a) for c in root.iter('object') for a in c.iter('bndbox')])
             mask = torch.cat([self._infer_mask_from_box(b, im_shape).unsqueeze(0) for b in bbox_loc], dim=0)
 
@@ -57,10 +55,10 @@ class FasterRCNNData(Dataset):
             bbox_loc = bbox_loc[ind, :]
             mask = mask[ind, :, :]
 
-            self.images.append(image)
-            self.boxes.append(bbox_loc.pin_memory())
-            self.labels.append(class_labels.pin_memory())
-            self.masks.append(mask)
+            self.images.append(image.cuda())
+            self.boxes.append(bbox_loc.pin_memory().cuda())
+            self.labels.append(class_labels.pin_memory().cuda())
+            self.masks.append(mask.cuda())
 
     def __getitem__(self, item: int) -> Dict[str, torch.Tensor]:
         data_dict = {'boxes': self.boxes[item].clone(),

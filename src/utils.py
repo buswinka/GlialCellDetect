@@ -5,7 +5,7 @@ import cv2
 import PIL.Image
 import skimage.io
 import skimage.color
-from typing import Union, Dict
+from typing import Union, Dict, List
 
 
 def show_box_pred_simple(image, boxes):
@@ -13,7 +13,7 @@ def show_box_pred_simple(image, boxes):
     # x1, y1, x2, y2
 
     plt.imshow(image)
-    plt.tight_layout()
+    # plt.tight_layout()
 
     for i, box in enumerate(boxes):
         x1 = box[0]
@@ -209,3 +209,82 @@ def color_from_ind(i: int) -> np.ndarray:
     """
     np.random.seed(i)
     return np.random.random(3)
+
+
+def calculate_indexes(pad_size: int, eval_image_size: int, image_shape: int, padded_image_shape: int) -> List[List[int]]:
+    """
+    This calculates indexes for the complete evaluation of an arbitrarily large image by unet.
+    each index is offset by eval_image_size, but has a width of eval_image_size + pad_size * 2.
+    Unet needs padding on each side of the evaluation to ensure only full convolutions are used
+    in generation of the final mask. If the algorithm cannot evenly create indexes for
+    padded_image_shape, an additional index is added at the end of equal size.
+
+    :param pad_size: int corresponding to the amount of padding on each side of the
+                     padded image
+    :param eval_image_size: int corresponding to the shape of the image to be used for
+                            the final mask
+    :param image_shape: int Shape of image before padding is applied
+
+    :param padded_image_shape: int Shape of image after padding is applied
+
+    :return: List of lists corresponding to the indexes
+    """
+
+    # We want to account for when the eval image size is super big, just return index for the whole image.
+    if eval_image_size > image_shape:
+        return [[0, image_shape]]
+
+    try:
+        ind_list = torch.arange(0, image_shape, eval_image_size)
+    except RuntimeError:
+        raise RuntimeError(f'Calculate_indexes has incorrect values {pad_size} | {image_shape} | {eval_image_size}:\n'
+                           f'You are likely trying to have a chunk smaller than the set evaluation image size. '
+                           'Please decrease number of chunks.')
+    ind = []
+    for i, z in enumerate(ind_list):
+        if i == 0:
+            continue
+        z1 = int(ind_list[i-1])
+        z2 = int(z-1) + (2 * pad_size)
+        if z2 < padded_image_shape:
+            ind.append([z1, z2])
+        else:
+            break
+    if not ind:  # Sometimes z is so small the first part doesnt work. Check if z_ind is empty, if it is do this!!!
+        z1 = 0
+        z2 = eval_image_size + pad_size * 2
+        ind.append([z1, z2])
+        ind.append([padded_image_shape - (eval_image_size+pad_size * 2), padded_image_shape])
+    else:  # we always add at the end to ensure that the whole thing is covered.
+        z1 = padded_image_shape - (eval_image_size + pad_size * 2)
+        z2 = padded_image_shape - 1
+        ind.append([z1, z2])
+    return ind
+
+
+def merge_results_dict(results: Dict[str, List[Union[torch.Tensor, List[int]]]]) -> Dict[str, torch.Tensor]:
+    """
+    Merge results of multiple evaluations of faster_rcnn
+
+    :param results:
+    :return:
+    """
+    first = True
+    for i, data in enumerate(results['out_dict']):  # should be a list here
+        if first and data['boxes'].shape[0] != 0:
+            labels = data['labels']
+            scores = data['scores']
+            boxes = data['boxes']
+            boxes[:, [0, 2]] += results['x'][i][0]
+            boxes[:, [1, 3]] += results['y'][i][0]
+            first = False
+
+        elif not first and data['boxes'].shape != 0:
+            labels = torch.cat((labels, data['labels']), dim=0)
+            scores = torch.cat((scores, data['scores']), dim=0)
+            b = data['boxes']
+            b[:, [0, 2]] += results['x'][i][0]
+            b[:, [1, 3]] += results['y'][i][0]
+            boxes = torch.cat((boxes, b), dim=0)
+
+    return {'scores': scores, 'boxes': boxes, 'labels': labels}
